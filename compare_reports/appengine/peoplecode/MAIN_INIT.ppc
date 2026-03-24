@@ -1,0 +1,49 @@
+/* =============================================================
+   FIU_RETROFIT  –  MAIN.STEP01  (PeopleCode – OnExecute)
+   Reads the run control record, loads the DB link name and
+   optional filter into the state record, and validates that
+   the DB link is reachable before any processing starts.
+   ============================================================= */
+
+Local Record &rcRec;
+Local SQL    &sqlTest;
+Local string &dblink;
+
+/* --- Read Run Control ----------------------------------------- */
+&rcRec = CreateRecord(Record.FIU_RFTR_RC);
+&rcRec.OPRID.Value       = %OperatorId;
+&rcRec.RUN_CNTL_ID.Value = FIU_RFTR_AET.RUN_CNTL_ID;
+
+If Not &rcRec.SelectByKey() Then
+   MessageBox(%MsgStyle_OK, "FIU Retrofit", 0, 0,
+      "Run control not found for operator " | %OperatorId |
+      " / " | FIU_RFTR_AET.RUN_CNTL_ID);
+   Exit(1);
+End-If;
+
+/* --- Populate State Record ------------------------------------ */
+FIU_RFTR_AET.DBLINK_NAME  = RTrim(LTrim(&rcRec.DBLINK_NAME.Value));
+FIU_RFTR_AET.OBJ_TYPE_FLT = RTrim(LTrim(&rcRec.OBJ_TYPE_FLT.Value));
+FIU_RFTR_AET.AE_COPIED    = 0;
+FIU_RFTR_AET.AE_ERRORS    = 0;
+FIU_RFTR_AET.AE_SKIPPED   = 0;
+FIU_RFTR_AET.AE_SEQNO     = 0;
+
+&dblink = FIU_RFTR_AET.DBLINK_NAME;
+
+/* --- Validate DB Link ----------------------------------------- */
+If &dblink = "" Then
+   MessageBox(%MsgStyle_OK, "FIU Retrofit", 0, 0,
+      "DBLINK_NAME is blank on the run control. Please enter the Oracle DB link name.");
+   Exit(1);
+End-If;
+
+&sqlTest = CreateSQL("SELECT 1 FROM DUAL@" | &dblink);
+If Not &sqlTest.Fetch() Then
+   MessageBox(%MsgStyle_OK, "FIU Retrofit", 0, 0,
+      "Cannot connect via DB link: " | &dblink |
+      ". Verify the link exists and the target database is available.");
+   &sqlTest.Close();
+   Exit(1);
+End-If;
+&sqlTest.Close();

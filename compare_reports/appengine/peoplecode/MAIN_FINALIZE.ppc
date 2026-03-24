@@ -1,0 +1,69 @@
+/* =============================================================
+   FIU_RETROFIT  –  MAIN.STEP04  (PeopleCode – OnExecute)
+   Writes a summary to the App Engine log and prints the
+   skipped items so the developer knows what still needs
+   manual migration via App Designer.
+   ============================================================= */
+
+Local integer &nCopied, &nErrors, &nSkipped;
+Local SQL     &sqlSkip;
+Local string  &sType, &sItemId, &sMsg;
+
+&nCopied  = FIU_RFTR_AET.AE_COPIED;
+&nErrors  = FIU_RFTR_AET.AE_ERRORS;
+&nSkipped = FIU_RFTR_AET.AE_SKIPPED;
+
+/* --- Summary banner ------------------------------------------ */
+MessageBox(%MsgStyle_OK, "FIU Retrofit – Complete", 0, 0,
+   "Process Instance : " | %ProcessInstance | Char(10) |
+   "DB Link          : " | FIU_RFTR_AET.DBLINK_NAME | Char(10) |
+   "-----------------------------------" | Char(10) |
+   "Copied  : " | &nCopied  | Char(10) |
+   "Errors  : " | &nErrors  | Char(10) |
+   "Skipped : " | &nSkipped | Char(10) |
+   "-----------------------------------" | Char(10) |
+   "Review PS_FIU_RFTR_STG for details.");
+
+/* --- Log skipped items --------------------------------------- */
+If &nSkipped > 0 Then
+   MessageBox(%MsgStyle_OK, "FIU Retrofit – Manual Steps Required", 0, 0,
+      "The following object types must be migrated manually " |
+      "using App Designer Copy Project:");
+
+   &sqlSkip = CreateSQL(
+      "SELECT OBJECT_TYPE, ITEM_ID " |
+      "FROM   PS_FIU_RFTR_STG " |
+      "WHERE  PROCESS_INSTANCE = :1 " |
+      "AND    PROCESS_STATUS = 'S' " |
+      "ORDER BY OBJECT_TYPE, ITEM_ID",
+      %ProcessInstance);
+
+   While &sqlSkip.Fetch(&sType, &sItemId)
+      MessageBox(%MsgStyle_OK, "Skipped", 0, 0,
+         &sType | "  |  " | &sItemId);
+   End-While;
+   &sqlSkip.Close();
+End-If;
+
+/* --- Log errors ---------------------------------------------- */
+If &nErrors > 0 Then
+   Local SQL &sqlErr;
+   Local string &sErrMsg;
+
+   MessageBox(%MsgStyle_OK, "FIU Retrofit – Errors", 0, 0,
+      "The following items encountered errors during copy:");
+
+   &sqlErr = CreateSQL(
+      "SELECT OBJECT_TYPE, ITEM_ID, ERROR_MSG " |
+      "FROM   PS_FIU_RFTR_STG " |
+      "WHERE  PROCESS_INSTANCE = :1 " |
+      "AND    PROCESS_STATUS = 'E' " |
+      "ORDER BY OBJECT_TYPE, ITEM_ID",
+      %ProcessInstance);
+
+   While &sqlErr.Fetch(&sType, &sItemId, &sErrMsg)
+      MessageBox(%MsgStyle_OK, "Error", 0, 0,
+         &sType | "  |  " | &sItemId | Char(10) | &sErrMsg);
+   End-While;
+   &sqlErr.Close();
+End-If;

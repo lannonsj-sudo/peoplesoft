@@ -1,0 +1,202 @@
+/* =============================================================
+   FIU_RETROFIT  –  PROC_LOOP.STEP01  (PeopleCode – OnExecute)
+
+   For each FIU customization row (driven by the section select),
+   this step routes to the correct copy function based on object
+   type, then copies the PeopleCode from the source database to
+   the upgraded (target) database via Oracle DB link.
+
+   Tables used for standard PeopleCode (non-AE):
+     PSPCMPROG  – program header / compiled bytecode
+     PSPCMTXT   – source text in 2000-char chunks
+
+   Tables used for Application Engine PeopleCode:
+     PSAEPCMPROG – AE program header
+     PSAEPCMTXT  – AE source text chunks
+
+   Object types that require manual App Designer migration
+   (Records, Pages, Components, Portal Structures, etc.) are
+   logged as Skipped with an informational message.
+   ============================================================= */
+
+Local string  &sObjType, &sItemId, &sObjname, &sDblink;
+Local string  &sPrimaryObj, &sAeApplId, &sErrMsg;
+Local integer &nCopied;
+Local array of string &aParts;
+Local SQL     &sqlUpd;
+
+/* --- Pull values from state record --------------------------- */
+&sObjType  = FIU_RFTR_AET.AE_OBJECT_TYPE;
+&sItemId   = FIU_RFTR_AET.AE_ITEM_ID;
+&sObjname  = FIU_RFTR_AET.AE_OBJNAME;
+&sDblink   = FIU_RFTR_AET.DBLINK_NAME;
+&sErrMsg   = "";
+&nCopied   = 0;
+
+/* --- Primary object = first pipe-delimited segment of objname  */
+&aParts      = Split(&sObjname, "|");
+&sPrimaryObj = RTrim(LTrim(&aParts [1]));
+
+/* --- Route by object type ------------------------------------ */
+Evaluate &sObjType
+
+When "Record PeopleCode"
+When "Component PeopleCode"
+When "Component Record PeopleCode"
+When "Component Rec Fld PeopleCode"
+When "Page PeopleCode"
+When "Application Package PeopleCode"
+   /* All of these are stored in PSPCMPROG / PSPCMTXT.
+      OBJECTVALUE1 holds the primary object name.             */
+   &nCopied = CopyStandardPC(&sPrimaryObj, &sDblink, &sErrMsg);
+   Break;
+
+When "Application Engine PeopleCode"
+When "Application Engine Programs"
+When "Application Engine Sections"
+   /* AE PeopleCode lives in PSAEPCMPROG / PSAEPCMTXT.
+      The AE program name is the first dot-delimited segment
+      of item_id (e.g. "TL_MASS_TIME" from "TL_MASS_TIME.MAIN"). */
+   &aParts    = Split(&sItemId, ".");
+   &sAeApplId = RTrim(LTrim(&aParts [1]));
+   &nCopied   = CopyAEPC(&sAeApplId, &sDblink, &sErrMsg);
+   Break;
+
+When "Records"
+When "Pages"
+When "Components"
+When "Fields"
+When "Indexes"
+When "Translate Values"
+When "Menus"
+When "Portal Registry Structures"
+When "URL Definitions"
+When "Message Schemas"
+When "Images"
+When "Style Sheets"
+When "HTML"
+   /* Metadata objects must be migrated via App Designer
+      Copy Project or Data Mover — not via PeopleCode.       */
+   &sErrMsg = "S:Manual migration required via App Designer Copy Project";
+   Break;
+
+When-Other
+   &sErrMsg = "E:Unrecognised object type: " | &sObjType;
+End-Evaluate;
+
+/* --- Update staging status ----------------------------------- */
+Local string &sStatus;
+
+If Left(&sErrMsg, 2) = "S:" Then
+   /* Skipped – manual action needed */
+   &sStatus = "S";
+   &sErrMsg = Mid(&sErrMsg, 3, 252);
+   FIU_RFTR_AET.AE_SKIPPED = FIU_RFTR_AET.AE_SKIPPED + 1;
+ElseIf &sErrMsg = "" Then
+   /* Success */
+   &sStatus = "C";
+   FIU_RFTR_AET.AE_COPIED = FIU_RFTR_AET.AE_COPIED + 1;
+Else
+   /* Error */
+   If Left(&sErrMsg, 2) = "E:" Then
+      &sErrMsg = Mid(&sErrMsg, 3, 252);
+   End-If;
+   &sStatus = "E";
+   FIU_RFTR_AET.AE_ERRORS = FIU_RFTR_AET.AE_ERRORS + 1;
+End-If;
+
+&sqlUpd = CreateSQL(
+   "UPDATE PS_FIU_RFTR_STG " |
+   "SET    PROCESS_STATUS = :1, ERROR_MSG = :2 " |
+   "WHERE  PROCESS_INSTANCE = :3 " |
+   "AND    SEQNO = :4",
+   &sStatus, Left(&sErrMsg, 254),
+   %ProcessInstance, FIU_RFTR_AET.AE_SEQNO);
+
+/* =============================================================
+   LOCAL FUNCTIONS
+   ============================================================= */
+
+/* -------------------------------------------------------------
+   CopyStandardPC
+   Copies PSPCMPROG and PSPCMTXT rows for a given primary
+   object name (OBJECTVALUE1) to the target DB via DB link.
+   ------------------------------------------------------------- */
+Function CopyStandardPC(&sPrimObj As string, &sLink As string,
+                         &sErr As string out) Returns integer
+
+   Local SQL     &sqlDel, &sqlIns;
+   Local integer &nRows;
+
+   /* -- Delete existing rows in target -- */
+   &sqlDel = CreateSQL(
+      "DELETE FROM PSPCMPROG@" | &sLink |
+      " WHERE OBJECTVALUE1 = :1", &sPrimObj);
+
+   &sqlDel = CreateSQL(
+      "DELETE FROM PSPCMTXT@" | &sLink |
+      " WHERE OBJECTVALUE1 = :1", &sPrimObj);
+
+   /* -- Copy header rows from source to target -- */
+   &sqlIns = CreateSQL(
+      "INSERT INTO PSPCMPROG@" | &sLink |
+      " SELECT * FROM PSPCMPROG WHERE OBJECTVALUE1 = :1",
+      &sPrimObj);
+
+   /* -- Copy source text from source to target -- */
+   &sqlIns = CreateSQL(
+      "INSERT INTO PSPCMTXT@" | &sLink |
+      " SELECT * FROM PSPCMTXT WHERE OBJECTVALUE1 = :1",
+      &sPrimObj);
+   &nRows = &sqlIns.%SQLROWS;
+
+   If &nRows = 0 Then
+      &sErr = "No rows found in PSPCMTXT for object: " | &sPrimObj;
+      Return 0;
+   End-If;
+
+   Return &nRows;
+
+End-Function;
+
+/* -------------------------------------------------------------
+   CopyAEPC
+   Copies PSAEPCMPROG and PSAEPCMTXT rows for a given
+   AE_APPLID to the target DB via DB link.
+   ------------------------------------------------------------- */
+Function CopyAEPC(&sAeId As string, &sLink As string,
+                   &sErr As string out) Returns integer
+
+   Local SQL     &sqlDel, &sqlIns;
+   Local integer &nRows;
+
+   /* -- Delete existing AE PeopleCode in target -- */
+   &sqlDel = CreateSQL(
+      "DELETE FROM PSAEPCMPROG@" | &sLink |
+      " WHERE AE_APPLID = :1", &sAeId);
+
+   &sqlDel = CreateSQL(
+      "DELETE FROM PSAEPCMTXT@" | &sLink |
+      " WHERE AE_APPLID = :1", &sAeId);
+
+   /* -- Copy AE program header -- */
+   &sqlIns = CreateSQL(
+      "INSERT INTO PSAEPCMPROG@" | &sLink |
+      " SELECT * FROM PSAEPCMPROG WHERE AE_APPLID = :1",
+      &sAeId);
+
+   /* -- Copy AE source text -- */
+   &sqlIns = CreateSQL(
+      "INSERT INTO PSAEPCMTXT@" | &sLink |
+      " SELECT * FROM PSAEPCMTXT WHERE AE_APPLID = :1",
+      &sAeId);
+   &nRows = &sqlIns.%SQLROWS;
+
+   If &nRows = 0 Then
+      &sErr = "No rows found in PSAEPCMTXT for AE: " | &sAeId;
+      Return 0;
+   End-If;
+
+   Return &nRows;
+
+End-Function;
