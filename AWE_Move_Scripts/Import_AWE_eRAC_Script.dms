@@ -1,0 +1,6 @@
+SET NO TRACE;
+SET LOG N:\PSDOCS\HCM_92\Developers\shaun\log.log;
+SET INPUT N:\PSDOCS\HCM_92\Developers\Shaun\AWE_POI_SETUP.dat;
+SET UPDATE_DUPS; 
+
+IMPORT *;
