@@ -1,0 +1,53 @@
+/* ================================================================
+   Record:  FIU_AWE_WRK  (derived/work record)
+   Field:   EXPORT_BTN   (push button, label: "Download Export DMS")
+   Event:   FieldChange
+
+   Validates page inputs then opens a browser download for the
+   Export DMS script via the WEBLIB_FIU_AWE iScript.
+
+   Page fields expected on FIU_AWE_WRK:
+     EOAWPRCS_ID  - Character  - AWE Process ID
+     EFFDT        - Date       - Effective Date
+     PREV_EFFDT   - Date       - Previous Effective Date (optional)
+   ================================================================ */
+
+Local string &sPID;
+Local date   &dEffdt;
+Local date   &dPrevEffdt;
+Local string &sEffdt;
+Local string &sPrevEffdt;
+Local string &sURL;
+
+&sPID = FIU_AWE_WRK.EOAWPRCS_ID;
+If None(&sPID) Then
+   Error MsgGetText(0, 0, "Process ID (EOAWPRCS_ID) is required.");
+End-If;
+
+&dEffdt = FIU_AWE_WRK.EFFDT;
+If None(&dEffdt) Then
+   Error MsgGetText(0, 0, "Effective Date (EFFDT) is required.");
+End-If;
+
+/* Format EFFDT as YYYY-MM-DD for the iScript URL parameter */
+&sEffdt = String(Year(&dEffdt)) | "-" |
+          Right("0" | String(Month(&dEffdt)), 2) | "-" |
+          Right("0" | String(Day(&dEffdt)), 2);
+
+/* Prev EFFDT is optional — pass as empty string if not entered */
+&sPrevEffdt = "";
+&dPrevEffdt = FIU_AWE_WRK.PREV_EFFDT;
+If All(&dPrevEffdt) Then
+   &sPrevEffdt = String(Year(&dPrevEffdt)) | "-" |
+                 Right("0" | String(Month(&dPrevEffdt)), 2) | "-" |
+                 Right("0" | String(Day(&dPrevEffdt)), 2);
+End-If;
+
+/* Build iScript URL and trigger download */
+&sURL = GenerateScriptContentURL(%Portal, %Node, Record.WEBLIB_FIU_AWE, Field.ISCRIPT1, "FieldFormula", "IScript_AWEDownload");
+&sURL = &sURL | "?pid=" | EncodeURLForQueryString(&sPID) |
+                "&effdt=" | &sEffdt |
+                "&preveffdt=" | &sPrevEffdt |
+                "&type=export";
+
+ViewURL(&sURL);

@@ -1,0 +1,34 @@
+/* ================================================================
+   Record:  FIU_AWE_WRK  (derived/work record)
+   Field:   IMPORT_BTN   (push button, label: "Download Import DMS")
+   Event:   FieldChange
+
+   Validates page inputs then opens a browser download for the
+   Import DMS script via the WEBLIB_FIU_AWE iScript.
+   ================================================================ */
+
+Local string &sPID;
+Local date   &dEffdt;
+Local string &sEffdt;
+Local string &sURL;
+
+&sPID = FIU_AWE_WRK.EOAWPRCS_ID;
+If None(&sPID) Then
+   Error MsgGetText(0, 0, "Process ID (EOAWPRCS_ID) is required.");
+End-If;
+
+&dEffdt = FIU_AWE_WRK.EFFDT;
+If None(&dEffdt) Then
+   Error MsgGetText(0, 0, "Effective Date (EFFDT) is required.");
+End-If;
+
+&sEffdt = String(Year(&dEffdt)) | "-" |
+          Right("0" | String(Month(&dEffdt)), 2) | "-" |
+          Right("0" | String(Day(&dEffdt)), 2);
+
+&sURL = GenerateScriptContentURL(%Portal, %Node, Record.WEBLIB_FIU_AWE, Field.ISCRIPT1, "FieldFormula", "IScript_AWEDownload");
+&sURL = &sURL | "?pid=" | EncodeURLForQueryString(&sPID) |
+                "&effdt=" | &sEffdt |
+                "&type=import";
+
+ViewURL(&sURL);

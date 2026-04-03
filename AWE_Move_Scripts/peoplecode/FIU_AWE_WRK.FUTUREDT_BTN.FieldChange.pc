@@ -1,0 +1,45 @@
+/* ================================================================
+   Record:  FIU_AWE_WRK  (derived/work record)
+   Field:   FUTUREDT_BTN (push button, label: "Download Future Date SQL")
+   Event:   FieldChange
+
+   Validates page inputs then opens a browser download for the
+   Future Date SQL script via the WEBLIB_FIU_AWE iScript.
+   ================================================================ */
+
+Local string &sPID;
+Local date   &dEffdt;
+Local date   &dPrevEffdt;
+Local string &sEffdt;
+Local string &sPrevEffdt;
+Local string &sURL;
+
+&sPID = FIU_AWE_WRK.EOAWPRCS_ID;
+If None(&sPID) Then
+   Error MsgGetText(0, 0, "Process ID (EOAWPRCS_ID) is required.");
+End-If;
+
+&dEffdt = FIU_AWE_WRK.EFFDT;
+If None(&dEffdt) Then
+   Error MsgGetText(0, 0, "Effective Date (EFFDT) is required.");
+End-If;
+
+&sEffdt = String(Year(&dEffdt)) | "-" |
+          Right("0" | String(Month(&dEffdt)), 2) | "-" |
+          Right("0" | String(Day(&dEffdt)), 2);
+
+&sPrevEffdt = "";
+&dPrevEffdt = FIU_AWE_WRK.PREV_EFFDT;
+If All(&dPrevEffdt) Then
+   &sPrevEffdt = String(Year(&dPrevEffdt)) | "-" |
+                 Right("0" | String(Month(&dPrevEffdt)), 2) | "-" |
+                 Right("0" | String(Day(&dPrevEffdt)), 2);
+End-If;
+
+&sURL = GenerateScriptContentURL(%Portal, %Node, Record.WEBLIB_FIU_AWE, Field.ISCRIPT1, "FieldFormula", "IScript_AWEDownload");
+&sURL = &sURL | "?pid=" | EncodeURLForQueryString(&sPID) |
+                "&effdt=" | &sEffdt |
+                "&preveffdt=" | &sPrevEffdt |
+                "&type=futuredate";
+
+ViewURL(&sURL);

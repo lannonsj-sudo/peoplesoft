@@ -1,0 +1,285 @@
+/* ================================================================
+   Record:  WEBLIB_FIU_AWE
+   Field:   ISCRIPT1
+   Event:   FieldFormula
+
+   Purpose: iScript function library — generates and streams AWE
+            workflow move scripts (DMS / SQL) as browser downloads.
+
+   iScript entry point: IScript_AWEDownload
+
+   URL parameters (all passed via query string):
+     pid       - EOAWPRCS_ID  e.g. FIU_eRAC_APPROVAL
+     effdt     - Effective date in YYYY-MM-DD format
+     preveffdt - Previous effective date YYYY-MM-DD (optional)
+     type      - Script to generate: export | import | futuredate
+
+   PS Objects required:
+     Record:    WEBLIB_FIU_AWE  (WEBLIB-type record with field ISCRIPT1)
+     Permission: iScript must be registered under a Permission List
+                 (PeopleTools > Security > Permissions & Roles > Permission Lists
+                  > Web Libraries tab)
+   ================================================================ */
+
+Constant &BASE_PATH = "N:\PSDOCS\HCM_92\Developers\Shaun";
+
+
+/* ----------------------------------------------------------------
+   GetMonAbbrv
+   Return Oracle 3-letter uppercase month abbreviation for month
+   number 1-12.
+   ---------------------------------------------------------------- */
+Function GetMonAbbrv(&nMonth As integer) Returns string
+   Local array of string &aMonths;
+   &aMonths = CreateArrayRept("", 12);
+   &aMonths[1]  = "JAN";  &aMonths[2]  = "FEB";  &aMonths[3]  = "MAR";
+   &aMonths[4]  = "APR";  &aMonths[5]  = "MAY";  &aMonths[6]  = "JUN";
+   &aMonths[7]  = "JUL";  &aMonths[8]  = "AUG";  &aMonths[9]  = "SEP";
+   &aMonths[10] = "OCT";  &aMonths[11] = "NOV";  &aMonths[12] = "DEC";
+   Return &aMonths[&nMonth];
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   IsoToOracleDate
+   Convert YYYY-MM-DD string to DD-MON-YYYY string.
+   e.g. "2020-07-19" → "19-JUL-2020"
+   ---------------------------------------------------------------- */
+Function IsoToOracleDate(&sIso As string) Returns string
+   Local string &sYear  = Substring(&sIso, 1, 4);
+   Local string &sMonth = Substring(&sIso, 6, 2);
+   Local string &sDay   = Substring(&sIso, 9, 2);
+   Return &sDay | "-" | GetMonAbbrv(Value(&sMonth)) | "-" | &sYear;
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   GetYearToken
+   Extract YYYY from YYYY-MM-DD.  e.g. "2020-07-19" → "2020"
+   Used as the search token in EOAWCRTA_ID INSTR/SUBSTR expressions.
+   ---------------------------------------------------------------- */
+Function GetYearToken(&sIso As string) Returns string
+   Return Substring(&sIso, 1, 4);
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   CrtaNextID
+   Build the Oracle SUBSTR expression that replaces the year token
+   in an EOAWCRTA_ID column while preserving any trailing -NextID
+   suffix.  Used for EOAW_PATH, EOAW_STEP, EOAWCRTA*.
+   ---------------------------------------------------------------- */
+Function CrtaNextID(&sCol As string, &sYear As string) Returns string
+   Return "SUBSTR(" | &sCol | ", 1, INSTR(" | &sCol | ", '" | &sYear | "')-1) " |
+          "|| TO_CHAR(SYSDATE+1,'YYYY-MM-DD') " |
+          "|| (CASE WHEN INSTR(" | &sCol | ", '-NextID') <> 0 " |
+          "THEN SUBSTR(" | &sCol | ", INSTR(" | &sCol | ", '-NextID'), LENGTH(" | &sCol | ")-1) " |
+          "ELSE '' END)";
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   CrtaSimple
+   Build the Oracle SUBSTR expression that replaces the year token
+   without -NextID suffix handling.  Used for EOAW_PRCS only.
+   ---------------------------------------------------------------- */
+Function CrtaSimple(&sCol As string, &sYear As string) Returns string
+   Return "SUBSTR(" | &sCol | ", 1, INSTR(" | &sCol | ", '" | &sYear | "')-1) " |
+          "|| TO_CHAR(SYSDATE+1,'YYYY-MM-DD')";
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   BuildExportDMS
+   Generate the full content for Export_<PID>_Script.dms.
+   ---------------------------------------------------------------- */
+Function BuildExportDMS(&sPID As string, &sEffdt As string, &sDat As string, &sLog As string) Returns string
+   Local string &NL = Char(13) | Char(10);
+   Local string &s;
+
+   &s = "SET NO TRACE;" | &NL;
+   &s = &s | "SET LOG " | &sLog | ";" | &NL;
+   &s = &s | "SET OUTPUT " | &sDat | ";" | &NL;
+   &s = &s | &NL;
+   &s = &s | "EXPORT EOAW_PATH       WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = %DateIn('" | &sEffdt | "');" | &NL;
+   &s = &s | "EXPORT EOAW_PRCS       WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = %DateIn('" | &sEffdt | "');" | &NL;
+   &s = &s | "EXPORT EOAW_STAGE      WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = %DateIn('" | &sEffdt | "');" | &NL;
+   &s = &s | "EXPORT EOAW_STEP       WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = %DateIn('" | &sEffdt | "');" | &NL;
+   &s = &s | "EXPORT EOAW_TIMEOUT    WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = %DateIn('" | &sEffdt | "');" | &NL;
+   &s = &s | "EXPORT EOAW_TIMEOUTDEF WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = %DateIn('" | &sEffdt | "');" | &NL;
+   &s = &s | "EXPORT EOAWCRTA        WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%" | &sEffdt | "%';" | &NL;
+   &s = &s | "EXPORT EOAWCRTA_REC    WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%" | &sEffdt | "%';" | &NL;
+   &s = &s | "EXPORT EOAWCRTA_VAL    WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%" | &sEffdt | "%';" | &NL;
+
+   Return &s;
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   BuildImportDMS
+   Generate the full content for Import_<PID>_Script.dms.
+   ---------------------------------------------------------------- */
+Function BuildImportDMS(&sDat As string, &sLog As string) Returns string
+   Local string &NL = Char(13) | Char(10);
+   Local string &s;
+
+   &s = "SET NO TRACE;" | &NL;
+   &s = &s | "SET LOG " | &sLog | ";" | &NL;
+   &s = &s | "SET INPUT " | &sDat | ";" | &NL;
+   &s = &s | "SET UPDATE_DUPS;" | &NL;
+   &s = &s | &NL;
+   &s = &s | "IMPORT *;" | &NL;
+
+   Return &s;
+End-Function;
+
+
+/* ----------------------------------------------------------------
+   BuildFutureDateSQL
+   Generate the full content for Import_<PID>_FutureDateScript.sql.
+   Deletes SYSDATE+1 rows to clear constraint conflicts, optionally
+   marks the previous effective date row as non-default, then shifts
+   all imported rows from &sEffdt to SYSDATE+1.
+   ---------------------------------------------------------------- */
+Function BuildFutureDateSQL(&sPID As string, &sEffdt As string, &sPrevEffdt As string, &sDat As string, &sLog As string) Returns string
+   Local string &NL   = Char(13) | Char(10);
+   Local string &dOra = IsoToOracleDate(&sEffdt);
+   Local string &yr   = GetYearToken(&sEffdt);
+   Local string &s;
+
+   /* --- Delete SYSDATE+1 rows ------------------------------------ */
+   &s = "--- Delete any rows already sitting at SYSDATE+1 to avoid unique constraint errors." | &NL;
+   &s = &s | "--- " | &sPID | " is the process identifier embedded in EOAWCRTA_ID." | &NL;
+   &s = &s | &NL;
+   &s = &s | "DELETE PS_EOAW_PATH       WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TRUNC(SYSDATE+1);" | &NL;
+   &s = &s | "DELETE PS_EOAW_PRCS       WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TRUNC(SYSDATE+1);" | &NL;
+   &s = &s | "DELETE PS_EOAW_STAGE      WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TRUNC(SYSDATE+1);" | &NL;
+   &s = &s | "DELETE PS_EOAW_STEP       WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TRUNC(SYSDATE+1);" | &NL;
+   &s = &s | "DELETE PS_EOAW_TIMEOUT    WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TRUNC(SYSDATE+1);" | &NL;
+   &s = &s | "DELETE PS_EOAW_TIMEOUTDEF WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TRUNC(SYSDATE+1);" | &NL;
+   &s = &s | "DELETE PS_EOAWCRTA_REC    WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%' || TO_CHAR(SYSDATE+1,'YYYY-MM-DD') || '%';" | &NL;
+   &s = &s | "DELETE PS_EOAWCRTA_VAL    WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%' || TO_CHAR(SYSDATE+1,'YYYY-MM-DD') || '%';" | &NL;
+   &s = &s | "DELETE PS_EOAWCRTA        WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%' || TO_CHAR(SYSDATE+1,'YYYY-MM-DD') || '%';" | &NL;
+   &s = &s | &NL;
+
+   /* --- EOAWDEFN_DEFAULT = N ------------------------------------- */
+   &s = &s | "--- Mark previous Process Definition as non-default (EOAWDEFN_DEFAULT = N)." | &NL;
+   &s = &s | &NL;
+   If All(&sPrevEffdt) Then
+      &s = &s | "UPDATE PS_EOAW_PRCS SET EOAWDEFN_DEFAULT = 'N' " |
+                "WHERE EOAWPRCS_ID = '" | &sPID | "' " |
+                "AND EFFDT = TO_DATE('" | IsoToOracleDate(&sPrevEffdt) | "','DD-MON-YYYY');" | &NL;
+   Else
+      &s = &s | "--- TODO: Replace <DD-MON-YYYY> with the previous effective date before running." | &NL;
+      &s = &s | "-- UPDATE PS_EOAW_PRCS SET EOAWDEFN_DEFAULT = 'N' " |
+                "WHERE EOAWPRCS_ID = '" | &sPID | "' " |
+                "AND EFFDT = TO_DATE('<DD-MON-YYYY>','DD-MON-YYYY');" | &NL;
+   End-If;
+   &s = &s | &NL;
+
+   /* --- Shift EFFDT to SYSDATE+1 --------------------------------- */
+   &s = &s | "--- Shift effective date from " | &sEffdt | " to SYSDATE+1." | &NL;
+   &s = &s | "--- The year token '" | &yr | "' in EOAWCRTA_ID is replaced with the new YYYY-MM-DD date." | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAW_PATH A " |
+             "SET EFFDT = TRUNC(SYSDATE+1), " |
+             "EOAWCRTA_ID = " | CrtaNextID("A.EOAWCRTA_ID", &yr) | " " |
+             "WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TO_DATE('" | &dOra | "','DD-MON-YYYY');" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAW_PRCS A " |
+             "SET EFFDT = TRUNC(SYSDATE+1), " |
+             "A.EOAWCRTA_ID = " | CrtaSimple("A.EOAWCRTA_ID", &yr) | ", " |
+             "A.EOAWDEFN_CRTA_ID = " | CrtaSimple("A.EOAWCRTA_ID", &yr) | " " |
+             "WHERE A.EOAWPRCS_ID = '" | &sPID | "' AND A.EFFDT = TO_DATE('" | &dOra | "','DD-MON-YYYY');" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAW_STAGE " |
+             "SET EFFDT = TRUNC(SYSDATE+1) " |
+             "WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TO_DATE('" | &dOra | "','DD-MON-YYYY');" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAW_STEP A " |
+             "SET EFFDT = TRUNC(SYSDATE+1), " |
+             "EOAWSELF_CRTA_ID = " | CrtaNextID("A.EOAWSELF_CRTA_ID", &yr) | ", " |
+             "EOAWCRTA_ID = " | CrtaNextID("A.EOAWCRTA_ID", &yr) | " " |
+             "WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TO_DATE('" | &dOra | "','DD-MON-YYYY');" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAW_TIMEOUT " |
+             "SET EFFDT = TRUNC(SYSDATE+1) " |
+             "WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TO_DATE('" | &dOra | "','DD-MON-YYYY');" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAW_TIMEOUTDEF " |
+             "SET EFFDT = TRUNC(SYSDATE+1) " |
+             "WHERE EOAWPRCS_ID = '" | &sPID | "' AND EFFDT = TO_DATE('" | &dOra | "','DD-MON-YYYY');" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAWCRTA_REC A " |
+             "SET EOAWCRTA_ID = " | CrtaNextID("A.EOAWCRTA_ID", &yr) | " " |
+             "WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%" | &sEffdt | "%';" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAWCRTA_VAL A " |
+             "SET EOAWCRTA_ID = " | CrtaNextID("A.EOAWCRTA_ID", &yr) | " " |
+             "WHERE EOAWCRTA_ID LIKE '%" | &sPID | "%" | &sEffdt | "%';" | &NL;
+   &s = &s | &NL;
+
+   &s = &s | "UPDATE PS_EOAWCRTA A " |
+             "SET A.EOAWCRTA_ID = " | CrtaNextID("A.EOAWCRTA_ID", &yr) | " " |
+             "WHERE A.EOAWCRTA_ID LIKE '%" | &sPID | "%" | &sEffdt | "%';" | &NL;
+
+   Return &s;
+End-Function;
+
+
+/* ================================================================
+   IScript_AWEDownload
+
+   Streams a generated AWE move script to the browser as a
+   file download.  Called via ViewURL from button FieldChange code.
+   ================================================================ */
+Function IScript_AWEDownload()
+   Local string &sPID       = %Request.GetParameter("pid");
+   Local string &sEffdt     = %Request.GetParameter("effdt");
+   Local string &sPrevEffdt = %Request.GetParameter("preveffdt");
+   Local string &sType      = %Request.GetParameter("type");
+
+   /* Validate required parameters */
+   If None(&sPID) Or None(&sEffdt) Or None(&sType) Then
+      %Response.SetContentType("text/plain");
+      %Response.Write("Error: pid, effdt, and type parameters are required.");
+      Return;
+   End-If;
+
+   Local string &sDat = &BASE_PATH | "\AWE_" | &sPID | ".dat";
+   Local string &sLog = &BASE_PATH | "\AWE_" | &sPID | "_log.log";
+
+   Local string &sContent;
+   Local string &sFileName;
+
+   Evaluate &sType
+   When "export"
+      &sContent  = BuildExportDMS(&sPID, &sEffdt, &sDat, &sLog);
+      &sFileName = "Export_" | &sPID | "_Script.dms";
+      Break;
+   When "import"
+      &sContent  = BuildImportDMS(&sDat, &sLog);
+      &sFileName = "Import_" | &sPID | "_Script.dms";
+      Break;
+   When "futuredate"
+      &sContent  = BuildFutureDateSQL(&sPID, &sEffdt, &sPrevEffdt, &sDat, &sLog);
+      &sFileName = "Import_" | &sPID | "_FutureDateScript.sql";
+      Break;
+   When-Other
+      %Response.SetContentType("text/plain");
+      %Response.Write("Error: type must be export, import, or futuredate.");
+      Return;
+   End-Evaluate;
+
+   %Response.SetContentType("application/octet-stream");
+   %Response.SetHeader("Content-Disposition", "attachment; filename=""" | &sFileName | """");
+   %Response.Write(&sContent);
+End-Function;
